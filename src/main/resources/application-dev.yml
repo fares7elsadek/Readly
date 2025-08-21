@@ -1,0 +1,36 @@
+﻿spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5433/readly
+    username: user
+    password: password
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: true
+    database: postgresql
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
+  mail:
+    host: localhost
+    port: 1025
+    properties:
+      mail:
+        smtp:
+          auth: false
+          starttls.enable: false
+
+app:
+  base-url: ${BASE_URL:http://localhost:8080}
+  max-login-attempts: 5
+  login-attempt-window-minutes: 15
+  jwt:
+    secret: ${JWT_SECRET:dGhpcyBpcyBhIHNlY3VyZSBrZXkgZm9yIGp3dCB0b2tlbiBnZW5lcmF0aW9u}
+    access-token-expiration: ${JWT_ACCESS_EXPIRATION:900000} # 15 minutes
+    refresh-token-expiration: ${JWT_REFRESH_EXPIRATION:7200000} # 2 hours
+  email:
+    from: ${EMAIL_FROM:noreply@readly.com}
+    verification-token-ttl-minutes: 30
+    max-retry-attempts: 3
+

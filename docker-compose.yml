@@ -1,0 +1,31 @@
+﻿services:
+  postgres:
+    container_name: postgres-sql-readly
+    image: postgres
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: readly
+    volumes:
+      - postgres:/data/postgres
+    ports:
+      - 5433:5432
+    networks:
+      - readly-net
+    restart: unless-stopped
+
+  mailhog:
+    image: mailhog/mailhog
+    container_name: mailhog
+    ports:
+      - "1025:1025"   # SMTP port
+      - "8025:8025"   # Web UI port
+    restart: unless-stopped
+
+networks:
+  readly-net:
+    driver: bridge
+
+volumes:
+  postgres:
+    driver: local
