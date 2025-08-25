@@ -21,6 +21,11 @@
       - "1025:1025"   # SMTP port
       - "8025:8025"   # Web UI port
     restart: unless-stopped
+  redis:
+    image: redis
+    container_name: redis_readly
+    ports:
+      - "6379:6379"
 
 networks:
   readly-net:

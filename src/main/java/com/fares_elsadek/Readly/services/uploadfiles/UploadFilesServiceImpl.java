@@ -22,7 +22,12 @@ public class UploadFilesServiceImpl implements UploadFilesService{
     }
     @Override
     public String saveFile(MultipartFile file) throws IOException {
-        var filename = file.getOriginalFilename() + "-" + UUID.randomUUID();
+        var fileName = file.getOriginalFilename();
+        int dotIndex = fileName.lastIndexOf('.');
+        String name = (dotIndex == -1) ? fileName : fileName.substring(0, dotIndex);
+        String extension = (dotIndex == -1) ? "" : fileName.substring(dotIndex);
+
+        var filename = name + "-" + UUID.randomUUID() + extension;
         Path filePath = root.resolve(filename);
         Files.copy(file.getInputStream(), filePath, StandardCopyOption.REPLACE_EXISTING);
         return filename;

@@ -17,8 +17,12 @@ import com.fares_elsadek.Readly.services.uploadfiles.UploadFilesService;
 import com.fares_elsadek.Readly.utils.CustomUserPrincipal;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
+import org.springframework.cache.annotation.Caching;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -41,293 +45,244 @@ public class BookServiceImpl implements BookService{
     private final UploadFilesService uploadFilesService;
 
     @Override
+    @Caching(evict = {
+            @CacheEvict(value = "books",allEntries = true),
+            @CacheEvict(value = "user-books-#{#root.target.getUserId()}" , allEntries = true)
+    })
     public ApiResponse<BookResponseDto> saveBook(BookRequestDto bookRequest) {
-        try {
-            var entity = bookMapper.toEntity(bookRequest);
-            entity.setOwner(userRepository.findById(getUserId()).orElseThrow(
-                    () -> new NotFoundException("User", getUserId())
-            ));
-            var savedBook = bookRepository.save(entity);
+        var entity = bookMapper.toEntity(bookRequest);
+        entity.setOwner(userRepository.findById(getUserId()).orElseThrow(
+                () -> new NotFoundException("User", getUserId())
+        ));
+        var savedBook = bookRepository.save(entity);
 
-            if(StringUtils.hasText(savedBook.getId())){
-                var dto = bookMapper.toBookResponse(savedBook);
-                return ApiResponse.success("Book has been successfully created and saved to your library.", dto);
-            } else {
-                return ApiResponse.error("Failed to create book. Please verify your information and try again.");
-            }
-        } catch (Exception ex) {
-            log.error("Error occurred while saving book: {}", ex.getMessage(), ex);
-            return ApiResponse.error("An unexpected error occurred while creating the book. Please try again later.");
+        if(StringUtils.hasText(savedBook.getId())){
+            var dto = bookMapper.toBookResponse(savedBook);
+            return ApiResponse.success("Book has been successfully created and saved to your library.", dto);
+        } else {
+            return ApiResponse.error("Failed to create book. Please verify your information and try again.");
         }
     }
 
     @Override
+    @Cacheable(value = "books" , key = "#bookId" , unless = "#result.data == null")
     public ApiResponse<BookResponseDto> getBookById(String bookId) {
-        try {
-            var entity = bookRepository.findById(bookId).orElseThrow(
-                    () -> new NotFoundException("Book", bookId)
-            );
 
-            var dto = bookMapper.toBookResponse(entity);
-            return ApiResponse.success("Book details retrieved successfully.", dto);
-        } catch (NotFoundException ex) {
-            return ApiResponse.error("The requested book could not be found. It may have been removed or the ID is incorrect.");
-        } catch (Exception ex) {
-            log.error("Error occurred while retrieving book with ID {}: {}", bookId, ex.getMessage(), ex);
-            return ApiResponse.error("An unexpected error occurred while retrieving the book details. Please try again later.");
-        }
+        var entity = bookRepository.findById(bookId).orElseThrow(
+                () -> new NotFoundException("Book", bookId)
+        );
+
+        var dto = bookMapper.toBookResponse(entity);
+        return ApiResponse.success("Book details retrieved successfully.", dto);
+
     }
 
     @Override
+    @Cacheable(value = "books", key = "'all_books_' + #page + '_' + #size",
+                unless = "#result.data == null || #result.data.isEmpty()")
     public ApiResponse<List<BookResponseDto>> getAllBooks(int page, int size) {
-        try {
-            Pageable pageable = PageRequest.of(page, size);
-            var entities = bookRepository.findAll(pageable);
 
-            List<BookResponseDto> bookDtos = entities.getContent().stream()
-                    .map(bookMapper::toBookResponse)
-                    .collect(Collectors.toList());
+        Pageable pageable = PageRequest.of(page, size);
+        var entities = bookRepository.findAll(pageable);
 
-            String message = bookDtos.isEmpty() ?
-                    "No books are currently available in the library." :
-                    String.format("Successfully retrieved %d books from the library (page %d of %d).",
-                            bookDtos.size(), page + 1, entities.getTotalPages());
+        List<BookResponseDto> bookDtos = entities.getContent().stream()
+                .map(bookMapper::toBookResponse)
+                .collect(Collectors.toList());
 
-            return ApiResponse.success(message, bookDtos);
-        } catch (Exception ex) {
-            log.error("Error occurred while retrieving all books: {}", ex.getMessage(), ex);
-            return ApiResponse.error("An unexpected error occurred while retrieving the book collection. Please try again later.");
-        }
+        String message = bookDtos.isEmpty() ?
+                "No books are currently available in the library." :
+                String.format("Successfully retrieved %d books from the library (page %d of %d).",
+                        bookDtos.size(), page + 1, entities.getTotalPages());
+
+        return ApiResponse.success(message, bookDtos);
+
     }
 
     @Override
+    @Cacheable(value = "user-books-#{#root.target.getUserId()}", key = "'owner_' + #root.target.getUserId() + '_' + #page + '_' + #size",
+            unless = "#result.data == null || #result.data.isEmpty()")
     public ApiResponse<List<BookResponseDto>> findAllByOwner(int page, int size) {
-        try {
-            var userId = getUserId();
-            Pageable pageable = PageRequest.of(page, size);
-            var entities = bookRepository.findAllByCreatedByEquals(userId, pageable);
 
-            List<BookResponseDto> bookDtos = entities.getContent().stream()
-                    .map(bookMapper::toBookResponse)
-                    .collect(Collectors.toList());
+        var userId = getUserId();
+        Pageable pageable = PageRequest.of(page, size);
+        var entities = bookRepository.findAllByCreatedByEquals(userId, pageable);
 
-            String message = bookDtos.isEmpty() ?
-                    "You haven't added any books to your library yet. Start building your collection!" :
-                    String.format("Successfully retrieved %d of your books (page %d of %d).",
-                            bookDtos.size(), page + 1, entities.getTotalPages());
+        List<BookResponseDto> bookDtos = entities.getContent().stream()
+                .map(bookMapper::toBookResponse)
+                .collect(Collectors.toList());
 
-            return ApiResponse.success(message, bookDtos);
-        } catch (InvalidTokenException ex) {
-            return ApiResponse.error("Your session has expired. Please log in again to access your books.");
-        } catch (Exception ex) {
-            log.error("Error occurred while retrieving books by owner: {}", ex.getMessage(), ex);
-            return ApiResponse.error("An unexpected error occurred while retrieving your books. Please try again later.");
-        }
+        String message = bookDtos.isEmpty() ?
+                "You haven't added any books to your library yet. Start building your collection!" :
+                String.format("Successfully retrieved %d of your books (page %d of %d).",
+                        bookDtos.size(), page + 1, entities.getTotalPages());
+
+        return ApiResponse.success(message, bookDtos);
+
     }
 
     @Override
+    @Cacheable(value = "user-books-#{#root.target.getUserId()}", key = "'borrowed_' + #root.target.getUserId() + '_' + #page + '_' + #size",
+            unless = "#result.data == null || #result.data.isEmpty()")
     public ApiResponse<List<BookResponseDto>> findAllBorrowedBooks(int page, int size) {
-        try {
-            var userId = getUserId();
-            Pageable pageable = PageRequest.of(page, size);
-            var entities = bookHistoryRepository.findAllBorrowedBooks(userId, pageable);
 
-            List<BookResponseDto> bookDtos = entities.getContent().stream()
-                    .map(transaction -> bookMapper.toBookResponse(transaction.getBook()))
-                    .collect(Collectors.toList());
+        var userId = getUserId();
+        Pageable pageable = PageRequest.of(page, size);
+        var entities = bookHistoryRepository.findAllBorrowedBooks(userId, pageable);
 
-            String message = bookDtos.isEmpty() ?
-                    "You haven't borrowed any books yet. Explore our library to find books to borrow!" :
-                    String.format("Successfully retrieved %d of your borrowed books (page %d of %d).",
-                            bookDtos.size(), page + 1, entities.getTotalPages());
+        List<BookResponseDto> bookDtos = entities.getContent().stream()
+                .map(transaction -> bookMapper.toBookResponse(transaction.getBook()))
+                .collect(Collectors.toList());
 
-            return ApiResponse.success(message, bookDtos);
-        } catch (InvalidTokenException ex) {
-            return ApiResponse.error("Your session has expired. Please log in again to access your borrowed books.");
-        } catch (Exception ex) {
-            log.error("Error occurred while retrieving borrowed books: {}", ex.getMessage(), ex);
-            return ApiResponse.error("An unexpected error occurred while retrieving your borrowed books. Please try again later.");
-        }
+        String message = bookDtos.isEmpty() ?
+                "You haven't borrowed any books yet. Explore our library to find books to borrow!" :
+                String.format("Successfully retrieved %d of your borrowed books (page %d of %d).",
+                        bookDtos.size(), page + 1, entities.getTotalPages());
+
+        return ApiResponse.success(message, bookDtos);
+
     }
 
     @Override
+    @Caching(evict = {
+            @CacheEvict(value = "books", key = "#bookId"),
+            @CacheEvict(value = "books", allEntries = true),
+            @CacheEvict(value = "user-books-#{#root.target.getUserId()}", allEntries = true)
+    })
     public ApiResponse<BookResponseDto> updateShareableStatus(String bookId) {
-        try {
-            var userId = getUserId();
-            var entity = bookRepository.findById(bookId).orElseThrow(
-                    () -> new NotFoundException("Book", bookId)
-            );
+        var userId = getUserId();
+        var entity = bookRepository.findById(bookId).orElseThrow(
+                () -> new NotFoundException("Book", bookId)
+        );
 
-            if(!entity.getOwner().getId().equals(userId))
-                throw new AccessDeniedException("You can only modify the sharing settings of books that you own.");
+        if(!entity.getOwner().getId().equals(userId))
+            throw new AccessDeniedException("You can only modify the sharing settings of books that you own.");
 
-            boolean newShareableStatus = !entity.isShareable();
-            entity.setShareable(newShareableStatus);
-            var book = bookRepository.save(entity);
-            var dto = bookMapper.toBookResponse(book);
+        boolean newShareableStatus = !entity.isShareable();
+        entity.setShareable(newShareableStatus);
+        var book = bookRepository.save(entity);
+        var dto = bookMapper.toBookResponse(book);
 
-            String statusMessage = newShareableStatus ? "available for sharing" : "no longer available for sharing";
-            return ApiResponse.success(String.format("Book sharing status updated successfully. This book is now %s.", statusMessage), dto);
-
-        } catch (NotFoundException ex) {
-            return ApiResponse.error("The book you're trying to modify could not be found. It may have been removed.");
-        } catch (AccessDeniedException ex) {
-            return ApiResponse.error(ex.getMessage());
-        } catch (InvalidTokenException ex) {
-            return ApiResponse.error("Your session has expired. Please log in again to modify book settings.");
-        } catch (Exception ex) {
-            log.error("Error occurred while updating shareable status for book {}: {}", bookId, ex.getMessage(), ex);
-            return ApiResponse.error("An unexpected error occurred while updating the book's sharing status. Please try again later.");
-        }
+        String statusMessage = newShareableStatus ? "available for sharing" : "no longer available for sharing";
+        return ApiResponse.success(String.format("Book sharing status updated successfully. This book is now %s.", statusMessage), dto);
     }
 
     @Override
+    @Caching(evict = {
+            @CacheEvict(value = "books", key = "#bookId"),
+            @CacheEvict(value = "books", allEntries = true),
+            @CacheEvict(value = "user-books-#{#root.target.getUserId()}", allEntries = true)
+    })
     public ApiResponse<BookResponseDto> updateArchivedStatus(String bookId) {
-        try {
-            var userId = getUserId();
-            var entity = bookRepository.findById(bookId).orElseThrow(
-                    () -> new NotFoundException("Book", bookId)
-            );
+        var userId = getUserId();
+        var entity = bookRepository.findById(bookId).orElseThrow(
+                () -> new NotFoundException("Book", bookId)
+        );
 
-            if(!entity.getOwner().getId().equals(userId))
-                throw new AccessDeniedException("You can only archive or unarchive books that you own.");
+        if(!entity.getOwner().getId().equals(userId))
+            throw new AccessDeniedException("You can only archive or unarchive books that you own.");
 
-            boolean newArchivedStatus = !entity.isArchived();
-            entity.setArchived(newArchivedStatus);
-            var book = bookRepository.save(entity);
-            var dto = bookMapper.toBookResponse(book);
+        boolean newArchivedStatus = !entity.isArchived();
+        entity.setArchived(newArchivedStatus);
+        var book = bookRepository.save(entity);
+        var dto = bookMapper.toBookResponse(book);
 
-            String statusMessage = newArchivedStatus ? "archived" : "restored from archive";
-            return ApiResponse.success(String.format("Book has been successfully %s.", statusMessage), dto);
-
-        } catch (NotFoundException ex) {
-            return ApiResponse.error("The book you're trying to modify could not be found. It may have been removed.");
-        } catch (AccessDeniedException ex) {
-            return ApiResponse.error(ex.getMessage());
-        } catch (InvalidTokenException ex) {
-            return ApiResponse.error("Your session has expired. Please log in again to modify book settings.");
-        } catch (Exception ex) {
-            log.error("Error occurred while updating archived status for book {}: {}", bookId, ex.getMessage(), ex);
-            return ApiResponse.error("An unexpected error occurred while updating the book's archive status. Please try again later.");
-        }
+        String statusMessage = newArchivedStatus ? "archived" : "restored from archive";
+        return ApiResponse.success(String.format("Book has been successfully %s.", statusMessage), dto);
     }
 
     @Transactional
     @Override
+    @CacheEvict(value = "user-books-#{#root.target.getUserId()}", allEntries = true)
     public ApiResponse<BookHistoryDto> borrowBook(String bookId) {
-        try {
-            var userId = getUserId();
-            var entity = bookRepository.findById(bookId).orElseThrow(
-                    () -> new NotFoundException("Book", bookId)
-            );
 
-            if(entity.getOwner().getId().equals(userId))
-                throw new AccessDeniedException("You cannot borrow your own books. This book is already in your personal library.");
+        var userId = getUserId();
+        var entity = bookRepository.findById(bookId).orElseThrow(
+                () -> new NotFoundException("Book", bookId)
+        );
 
-            if(entity.isArchived() || !entity.isShareable())
-                throw new AccessDeniedException("This book is currently unavailable for borrowing. It may be archived or not shared by the owner.");
+        if(entity.getOwner().getId().equals(userId))
+            throw new AccessDeniedException("You cannot borrow your own books. This book is already in your personal library.");
 
-            if(bookHistoryRepository.isAlreadyBorrowedByCurrentUser(userId, bookId))
-                throw new AccessDeniedException("You have already borrowed this book. Please return it before borrowing again.");
+        if(entity.isArchived() || !entity.isShareable())
+            throw new AccessDeniedException("This book is currently unavailable for borrowing. It may be archived or not shared by the owner.");
 
-            if(bookHistoryRepository.isAlreadyBorrowed(bookId))
-                throw new AccessDeniedException("This book is currently borrowed by another user. Please try again later when it becomes available.");
+        if(bookHistoryRepository.isAlreadyBorrowedByCurrentUser(userId, bookId))
+            throw new AccessDeniedException("You have already borrowed this book. Please return it before borrowing again.");
 
-            var user = userRepository.findById(userId)
-                    .orElseThrow(() -> new NotFoundException("User", userId));
+        if(bookHistoryRepository.isAlreadyBorrowed(bookId))
+            throw new AccessDeniedException("This book is currently borrowed by another user. Please try again later when it becomes available.");
 
-            var historyBuild = BookTransaction.builder()
-                    .book(entity)
-                    .user(user)
-                    .returnApproved(false)
-                    .returned(false)
-                    .build();
+        var user = userRepository.findById(userId)
+                .orElseThrow(() -> new NotFoundException("User", userId));
 
-            var bookTransaction = bookHistoryRepository.save(historyBuild);
-            var dto = bookHistoryMapper.toDto(bookTransaction);
+        var historyBuild = BookTransaction.builder()
+                .book(entity)
+                .user(user)
+                .returnApproved(false)
+                .returned(false)
+                .build();
 
-            return ApiResponse.success("Book borrowed successfully! You can now access this book in your borrowed collection.", dto);
+        var bookTransaction = bookHistoryRepository.save(historyBuild);
+        var dto = bookHistoryMapper.toDto(bookTransaction);
 
-        } catch (NotFoundException ex) {
-            return ApiResponse.error("The book you're trying to borrow could not be found. It may have been removed or is no longer available.");
-        } catch (AccessDeniedException ex) {
-            return ApiResponse.error(ex.getMessage());
-        } catch (InvalidTokenException ex) {
-            return ApiResponse.error("Your session has expired. Please log in again to borrow books.");
-        } catch (Exception ex) {
-            log.error("Error occurred while borrowing book {}: {}", bookId, ex.getMessage(), ex);
-            return ApiResponse.error("An unexpected error occurred while borrowing the book. Please try again later.");
-        }
+        return ApiResponse.success("Book borrowed successfully! You can now access this book in your borrowed collection.", dto);
+
     }
 
     @Override
+    @Transactional
     public ApiResponse<BookHistoryDto> returnBorrowBook(String bookId) {
-        try {
-            var userId = getUserId();
-            var entity = bookRepository.findById(bookId).orElseThrow(
-                    () -> new NotFoundException("Book", bookId)
-            );
 
-            if(!bookHistoryRepository.isAlreadyBorrowedByCurrentUser(userId, bookId))
-                throw new AccessDeniedException("You cannot return a book that you haven't borrowed or have already returned.");
+        var userId = getUserId();
+        var entity = bookRepository.findById(bookId).orElseThrow(
+                () -> new NotFoundException("Book", bookId)
+        );
 
-            var history = bookHistoryRepository.findByBookIdAndUserId(userId, bookId)
-                    .orElseThrow(() -> new NotFoundException("Book transaction", bookId));
+        if(!bookHistoryRepository.isAlreadyBorrowedByCurrentUser(userId, bookId))
+            throw new AccessDeniedException("You cannot return a book that you haven't borrowed or have already returned.");
 
-            history.setReturned(true);
-            var bookHistory = bookHistoryRepository.save(history);
-            var dto = bookHistoryMapper.toDto(bookHistory);
+        var history = bookHistoryRepository.findByBookIdAndUserId(userId, bookId)
+                .orElseThrow(() -> new NotFoundException("Book transaction", bookId));
 
-            return ApiResponse.success("Book return request submitted successfully! The book owner will be notified to approve the return.", dto);
+        history.setReturned(true);
+        var bookHistory = bookHistoryRepository.save(history);
+        var dto = bookHistoryMapper.toDto(bookHistory);
 
-        } catch (NotFoundException ex) {
-            return ApiResponse.error("The book or transaction record could not be found. The book may have already been returned.");
-        } catch (AccessDeniedException ex) {
-            return ApiResponse.error(ex.getMessage());
-        } catch (InvalidTokenException ex) {
-            return ApiResponse.error("Your session has expired. Please log in again to return books.");
-        } catch (Exception ex) {
-            log.error("Error occurred while returning book {}: {}", bookId, ex.getMessage(), ex);
-            return ApiResponse.error("An unexpected error occurred while processing the book return. Please try again later.");
-        }
+        return ApiResponse.success("Book return request submitted successfully! The book owner will be notified to approve the return.", dto);
     }
 
     @Override
+    @Transactional
     public ApiResponse<BookHistoryDto> approveReturnBorrowBook(String bookId) {
-        try {
-            var userId = getUserId();
-            var entity = bookRepository.findById(bookId).orElseThrow(
-                    () -> new NotFoundException("Book", bookId)
-            );
 
-            if(!entity.getOwner().getId().equals(userId))
-                throw new AccessDeniedException("You can only approve returns for books that you own.");
+        var userId = getUserId();
+        var entity = bookRepository.findById(bookId).orElseThrow(
+                () -> new NotFoundException("Book", bookId)
+        );
 
-            var history = bookHistoryRepository.findByBookIdAndUserId(userId, bookId)
-                    .orElseThrow(() -> new NotFoundException("Book transaction", bookId));
+        if(!entity.getOwner().getId().equals(userId))
+            throw new AccessDeniedException("You can only approve returns for books that you own.");
 
-            if(!history.isReturned())
-                throw new AccessDeniedException("Cannot approve return for a book that hasn't been marked as returned by the borrower.");
+        var history = bookHistoryRepository.findByBookIdAndUserId(userId, bookId)
+                .orElseThrow(() -> new NotFoundException("Book transaction", bookId));
 
-            history.setReturnApproved(true);
-            var bookHistory = bookHistoryRepository.save(history);
-            var dto = bookHistoryMapper.toDto(bookHistory);
+        if(!history.isReturned())
+            throw new AccessDeniedException("Cannot approve return for a book that hasn't been marked as returned by the borrower.");
 
-            return ApiResponse.success("Book return has been approved successfully! The book is now available for borrowing again.", dto);
+        history.setReturnApproved(true);
+        var bookHistory = bookHistoryRepository.save(history);
+        var dto = bookHistoryMapper.toDto(bookHistory);
 
-        } catch (NotFoundException ex) {
-            return ApiResponse.error("The book or transaction record could not be found. The return may have already been processed.");
-        } catch (AccessDeniedException ex) {
-            return ApiResponse.error(ex.getMessage());
-        } catch (InvalidTokenException ex) {
-            return ApiResponse.error("Your session has expired. Please log in again to approve book returns.");
-        } catch (Exception ex) {
-            log.error("Error occurred while approving return for book {}: {}", bookId, ex.getMessage(), ex);
-            return ApiResponse.error("An unexpected error occurred while approving the book return. Please try again later.");
-        }
+        return ApiResponse.success("Book return has been approved successfully! The book is now available for borrowing again.", dto);
     }
 
     @Override
+    @Transactional
+    @Async
+    @Caching(evict = {
+            @CacheEvict(value = "books", key = "#bookId"),
+            @CacheEvict(value = "user-books-#{#root.target.getUserId()}", allEntries = true)
+    })
     public ApiResponse<BookResponseDto> uploadBookCoverPicture(String bookId, MultipartFile coverImage) {
         try {
             var userId = getUserId();

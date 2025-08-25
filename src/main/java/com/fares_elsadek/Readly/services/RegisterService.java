@@ -16,6 +16,7 @@ import com.fares_elsadek.Readly.utils.SecureTokenGenerator;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -84,6 +85,7 @@ public class RegisterService {
                 .build();
     }
 
+    @Cacheable(value = "user_role")
     private Role getUserRole(){
         return roleRepository.findByName(RoleType.USER)
                 .orElseThrow(() -> new RoleNotFoundException("USER role not found in system"));
